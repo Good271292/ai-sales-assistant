@@ -1,0 +1,19 @@
+{
+    "callId": "mock-call-001",
+    "entityType": "lead",
+    "entityId": 12345,
+    "client": {
+      "name": "Иван Петров",
+      "company": "ООО Ромашка",
+      "phone": "+7 963 947-63-18"
+    },
+    "responsible": {
+      "id": 1,
+      "name": "Владимир Трубицын"
+    },
+    "call": {
+      "status": "connected",
+      "startedAt": "2026-06-27T18:52:00",
+      "source": "Bitrix24 telephony"
+    }
+  }
