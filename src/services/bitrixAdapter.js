@@ -281,6 +281,145 @@ function extractOptions(placementInfo, callStatus) {
   }
 }
 
+function scorePhoneCandidatePath(path) {
+  const normalizedPath = String(path || '').toUpperCase()
+  let score = 0
+
+  if (normalizedPath.includes('PHONE_NUMBER')) score += 100
+  if (normalizedPath.includes('PHONE')) score += 90
+  if (normalizedPath.includes('CALLER')) score += 70
+  if (normalizedPath.includes('CALL_FROM')) score += 70
+  if (normalizedPath.includes('CALL_TO')) score += 60
+  if (normalizedPath.includes('CLIENT')) score += 50
+  if (normalizedPath.includes('NUMBER')) score += 20
+
+  if (normalizedPath.includes('RESPONSIBLE')) score -= 120
+  if (normalizedPath.includes('ASSIGNED')) score -= 120
+  if (normalizedPath.includes('USER')) score -= 80
+  if (normalizedPath.includes('ID') && !normalizedPath.includes('PHONE')) score -= 60
+
+  return score
+}
+
+function collectPhoneCandidatesDeep(source, path = '', result = []) {
+  if (source === null || source === undefined) {
+    return result
+  }
+
+  const valueType = typeof source
+
+  if (valueType === 'string' || valueType === 'number') {
+    const digits = getPhoneDigits(source)
+
+    if (digits.length >= 10) {
+      const score = scorePhoneCandidatePath(path)
+
+      if (score > 0) {
+        result.push({
+          path,
+          value: String(source),
+          normalized: normalizePhoneForDisplay(source),
+          tail: getPhoneTail(source),
+          score,
+        })
+      }
+    }
+
+    return result
+  }
+
+  if (Array.isArray(source)) {
+    source.forEach((item, index) => {
+      collectPhoneCandidatesDeep(item, `${path}[${index}]`, result)
+    })
+
+    return result
+  }
+
+  if (valueType === 'object') {
+    Object.entries(source).forEach(([key, value]) => {
+      collectPhoneCandidatesDeep(value, path ? `${path}.${key}` : key, result)
+    })
+  }
+
+  return result
+}
+
+function uniquePhoneCandidates(candidates) {
+  const seen = new Set()
+
+  return candidates.filter((candidate) => {
+    const key = `${candidate.path}:${candidate.normalized}`
+
+    if (seen.has(key)) {
+      return false
+    }
+
+    seen.add(key)
+    return true
+  })
+}
+
+function getPhoneCandidatesFromSources(placementInfo, callStatus, options) {
+  return uniquePhoneCandidates([
+    ...collectPhoneCandidatesDeep(options, 'options'),
+    ...collectPhoneCandidatesDeep(callStatus, 'callStatus'),
+    ...collectPhoneCandidatesDeep(placementInfo, 'placementInfo'),
+  ]).sort((a, b) => {
+    return b.score - a.score
+  })
+}
+
+function extractCallPhoneFromSources(placementInfo, callStatus, options) {
+  const directCandidates = [
+    options.PHONE_NUMBER,
+    options.phoneNumber,
+    options.PHONE,
+    options.phone,
+    options.CALL_PHONE,
+    options.CALLER_PHONE,
+    options.CALLER_ID,
+    options.CALL_FROM,
+    options.CALL_TO,
+
+    callStatus?.PHONE_NUMBER,
+    callStatus?.phoneNumber,
+    callStatus?.PHONE,
+    callStatus?.phone,
+    callStatus?.CALL_PHONE,
+    callStatus?.CALLER_PHONE,
+    callStatus?.CALLER_ID,
+    callStatus?.CALL_FROM,
+    callStatus?.CALL_TO,
+
+    placementInfo?.options?.PHONE_NUMBER,
+    placementInfo?.options?.phoneNumber,
+    placementInfo?.options?.PHONE,
+    placementInfo?.options?.phone,
+    placementInfo?.options?.CALL_PHONE,
+    placementInfo?.options?.CALLER_PHONE,
+    placementInfo?.options?.CALLER_ID,
+    placementInfo?.options?.CALL_FROM,
+    placementInfo?.options?.CALL_TO,
+  ].filter(Boolean)
+
+  const directPhone = directCandidates.find((value) => {
+    return getPhoneDigits(value).length >= 10
+  })
+
+  if (directPhone) {
+    return normalizePhoneForDisplay(directPhone)
+  }
+
+  const deepCandidates = getPhoneCandidatesFromSources(
+    placementInfo,
+    callStatus,
+    options
+  )
+
+  return deepCandidates[0]?.normalized || ''
+}
+
 function extractEntityFromOptions(options) {
   const entityType = normalizeCrmType(options.CRM_ENTITY_TYPE)
   const entityId = normalizeFalse(options.CRM_ENTITY_ID)
@@ -560,15 +699,40 @@ export async function getBitrixContext() {
     const options = extractOptions(placementInfo, callStatus)
 
     const callId = options.CALL_ID || ''
-    const rawCallPhone = options.PHONE_NUMBER || options.PHONE || ''
+    const rawCallPhone = extractCallPhoneFromSources(
+      placementInfo,
+      callStatus,
+      options
+    )
     const callPhone = normalizePhoneForDisplay(rawCallPhone)
+    const phoneCandidates = getPhoneCandidatesFromSources(
+      placementInfo,
+      callStatus,
+      options
+    )
 
     let crmBinding = extractEntityFromOptions(options)
     let entity = null
     let rejectedCurrentBinding = null
     let phoneSearchResult = null
 
-    if (crmBinding.entityType && crmBinding.entityId) {
+    if (!callPhone && crmBinding.entityType && crmBinding.entityId) {
+      rejectedCurrentBinding = {
+        ...crmBinding,
+        title: '',
+        phones: [],
+        reason:
+          'Номер текущего звонка не получен из CALL_CARD. CRM-привязка отклонена, чтобы не показать случайного клиента.',
+      }
+
+      crmBinding = {
+        entityType: '',
+        entityId: '',
+        source: '',
+      }
+
+      entity = null
+    } else if (crmBinding.entityType && crmBinding.entityId) {
       entity = await loadEntity(crmBinding.entityType, crmBinding.entityId)
 
       if (callPhone && entity && !entityHasPhone(entity, callPhone)) {
@@ -607,11 +771,7 @@ export async function getBitrixContext() {
       entity = await loadEntity(crmBinding.entityType, crmBinding.entityId)
     }
 
-    if (
-      callPhone &&
-      entity &&
-      !entityHasPhone(entity, callPhone)
-    ) {
+    if (callPhone && entity && !entityHasPhone(entity, callPhone)) {
       rejectedCurrentBinding = rejectedCurrentBinding || {
         ...crmBinding,
         title: getEntityTitle(crmBinding.entityType, entity),
@@ -663,6 +823,7 @@ export async function getBitrixContext() {
         phoneSearchResult,
         entity,
         phoneVariants: buildPhoneVariants(callPhone),
+        phoneCandidates,
         rawCallPhone,
         normalizedCallPhone: callPhone,
         compareCallPhone: getPhoneTail(callPhone),
