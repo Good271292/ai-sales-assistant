@@ -1,0 +1,7 @@
+api/server/
+node_modules/
+dist/
+.vercel/
+*.zip
+.env
+.env.local

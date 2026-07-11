@@ -3,7 +3,7 @@ import scripts from './data/scripts.json'
 import { getBitrixContext, saveCallResult } from './services/bitrixAdapter'
 import './App.css'
 
-const APP_VERSION = 'call-card-vercel-v15'
+const APP_VERSION = 'call-card-vercel-v16'
 const CALL_CARD_HANDLER_URL =
   'https://ai-sales-assistant-tau-ten.vercel.app/api/placement?v=3'
 
@@ -15,7 +15,8 @@ const CALL_CARD_HANDLER_URL =
 const LIVE_TRANSCRIPT_WS_URL =
   'wss://handled-attacked-fit-exercise.trycloudflare.com/ws'
  */
-const LIVE_TRANSCRIPT_WS_URL = 'wss://handled-attacked-fit-exercise.trycloudflare.com/ws'
+const LIVE_TRANSCRIPT_WS_URL =
+  'wss://ai-sales-assistant-live-server.onrender.com/ws'
 
 /**
  * Демо-поток нужен только чтобы проверить UI live-подсказок в CALL_CARD.
