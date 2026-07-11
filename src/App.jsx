@@ -490,7 +490,7 @@ function App() {
 
   const isCallCard = bitrixContext?.placement === 'CALL_CARD'
   const isBx24 = bitrixContext?.runtimeMode === 'bx24'
-  const showTechnicalPanel = isBx24 && !isCallCard
+  const showTechnicalPanel = isBx24
 
   const liveTranscriptText = useMemo(() => {
     return liveMessages.map((message) => message.text).join('\n')
