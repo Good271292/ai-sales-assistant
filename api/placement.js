@@ -39,9 +39,9 @@ export default function handler(req, res) {
 
   <script src="https://api.bitrix24.com/api/v1/"></script>
 
-  <link rel="stylesheet" href="/assets/app.css?v=17" />
+  <link rel="stylesheet" href="/assets/app.css?v=18" />
 
-  <script type="module" src="/assets/app.js?v=17"></script>
+  <script type="module" src="/assets/app.js?v=18"></script>
 </body>
 </html>`)
 }

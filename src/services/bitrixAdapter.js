@@ -301,10 +301,26 @@ function scorePhoneCandidatePath(path) {
   return score
 }
 
-function collectPhoneCandidatesDeep(source, path = '', result = []) {
+function collectPhoneCandidatesDeep(
+  source,
+  path = '',
+  result = [],
+  visited = new WeakSet(),
+  depth = 0,
+  stats = { nodes: 0 }
+) {
+  const MAX_DEPTH = 5
+  const MAX_NODES = 200
+
   if (source === null || source === undefined) {
     return result
   }
+
+  if (stats.nodes >= MAX_NODES) {
+    return result
+  }
+
+  stats.nodes += 1
 
   const valueType = typeof source
 
@@ -328,19 +344,45 @@ function collectPhoneCandidatesDeep(source, path = '', result = []) {
     return result
   }
 
+  if (valueType !== 'object') {
+    return result
+  }
+
+  if (visited.has(source)) {
+    return result
+  }
+
+  visited.add(source)
+
+  if (depth >= MAX_DEPTH) {
+    return result
+  }
+
   if (Array.isArray(source)) {
     source.forEach((item, index) => {
-      collectPhoneCandidatesDeep(item, `${path}[${index}]`, result)
+      collectPhoneCandidatesDeep(
+        item,
+        `${path}[${index}]`,
+        result,
+        visited,
+        depth + 1,
+        stats
+      )
     })
 
     return result
   }
 
-  if (valueType === 'object') {
-    Object.entries(source).forEach(([key, value]) => {
-      collectPhoneCandidatesDeep(value, path ? `${path}.${key}` : key, result)
-    })
-  }
+  Object.entries(source).forEach(([key, value]) => {
+    collectPhoneCandidatesDeep(
+      value,
+      path ? `${path}.${key}` : key,
+      result,
+      visited,
+      depth + 1,
+      stats
+    )
+  })
 
   return result
 }
@@ -362,9 +404,12 @@ function uniquePhoneCandidates(candidates) {
 
 function getPhoneCandidatesFromSources(placementInfo, callStatus, options) {
   return uniquePhoneCandidates([
-    ...collectPhoneCandidatesDeep(options, 'options'),
-    ...collectPhoneCandidatesDeep(callStatus, 'callStatus'),
-    ...collectPhoneCandidatesDeep(placementInfo, 'placementInfo'),
+    ...collectPhoneCandidatesDeep(options || {}, 'options'),
+    ...collectPhoneCandidatesDeep(callStatus || {}, 'callStatus'),
+    ...collectPhoneCandidatesDeep(
+      placementInfo?.options || {},
+      'placementInfo.options'
+    ),
   ]).sort((a, b) => {
     return b.score - a.score
   })
@@ -814,8 +859,6 @@ export async function getBitrixContext() {
       client,
       responsible,
       raw: {
-        placementInfo,
-        callStatus,
         callStatusError,
         options,
         crmBinding,
