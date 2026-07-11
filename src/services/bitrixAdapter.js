@@ -296,7 +296,9 @@ function scorePhoneCandidatePath(path) {
   if (normalizedPath.includes('RESPONSIBLE')) score -= 120
   if (normalizedPath.includes('ASSIGNED')) score -= 120
   if (normalizedPath.includes('USER')) score -= 80
-  if (normalizedPath.includes('ID') && !normalizedPath.includes('PHONE')) score -= 60
+  if (normalizedPath.includes('ID') && !normalizedPath.includes('PHONE')) {
+    score -= 60
+  }
 
   return score
 }
@@ -801,18 +803,16 @@ export async function getBitrixContext() {
     if (!crmBinding.entityType || !crmBinding.entityId) {
       phoneSearchResult = await findEntityByPhone(callPhone)
 
-      if (phoneSearchResult.entityType && phoneSearchResult.entityId) {
-        crmBinding = {
-          entityType: phoneSearchResult.entityType,
-          entityId: phoneSearchResult.entityId,
-          source: phoneSearchResult.source,
-        }
-
-        entity = phoneSearchResult.entity || null
-      }
+      // ВАЖНО:
+      // Если Bitrix24 сам не дал CRM_ENTITY_TYPE / CRM_ENTITY_ID,
+      // не подставляем найденный по телефону дубль как основного клиента.
+      // Иначе можно показать менеджеру не того лида.
+      //
+      // Найденные сущности оставляем только в raw.phoneSearchResult
+      // для диагностики и будущего блока "Возможные совпадения".
     }
 
-    if (!entity) {
+    if (!entity && crmBinding.entityType && crmBinding.entityId) {
       entity = await loadEntity(crmBinding.entityType, crmBinding.entityId)
     }
 

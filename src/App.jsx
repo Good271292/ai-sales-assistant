@@ -3,7 +3,7 @@ import scripts from './data/scripts.json'
 import { getBitrixContext, saveCallResult } from './services/bitrixAdapter'
 import './App.css'
 
-const APP_VERSION = 'call-card-vercel-v19'
+const APP_VERSION = 'call-card-vercel-v20'
 const CALL_CARD_HANDLER_URL =
   'https://ai-sales-assistant-tau-ten.vercel.app/api/placement?v=3'
 
