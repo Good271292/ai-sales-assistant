@@ -3,25 +3,17 @@ import scripts from './data/scripts.json'
 import { getBitrixContext, saveCallResult } from './services/bitrixAdapter'
 import './App.css'
 
-const APP_VERSION = 'call-card-vercel-v18'
+const APP_VERSION = 'call-card-vercel-v19'
 const CALL_CARD_HANDLER_URL =
   'https://ai-sales-assistant-tau-ten.vercel.app/api/placement?v=3'
 
-/**
- * Пока backend WebSocket ещё не поднят.
- * Когда поднимем backend, сюда поставим wss://...
- *
- * Пример будущего значения:
-const LIVE_TRANSCRIPT_WS_URL =
-  'wss://handled-attacked-fit-exercise.trycloudflare.com/ws'
- */
 const LIVE_TRANSCRIPT_WS_URL =
   'wss://ai-sales-assistant-live-server.onrender.com/ws'
 
-/**
- * Демо-поток нужен только чтобы проверить UI live-подсказок в CALL_CARD.
- * Потом выключим и заменим на реальный WebSocket от backend/STT.
- */
+// На этом этапе тестируем браузерную транскрибацию.
+// Render WebSocket оставляем в коде, но авто-поток выключаем,
+// чтобы тестовые фразы с сервера не мешали проверке микрофона.
+const ENABLE_WEBSOCKET_LIVE_STREAM = false
 const ENABLE_DEMO_LIVE_STREAM = false
 
 const DEMO_LIVE_PHRASES = [
@@ -197,6 +189,11 @@ function normalizeQuestions(script) {
     },
     {
       id: 'q-5',
+      text: 'Кто принимает решение по внедрению CRM?',
+      required: true,
+    },
+    {
+      id: 'q-6',
       text: 'Когда вам было бы удобно обсудить внедрение подробнее?',
       required: true,
     },
@@ -225,16 +222,64 @@ function formatEntity(entityType, entityId) {
 }
 
 function normalizeText(text) {
-  return String(text || '').toLowerCase()
+  return String(text || '').toLowerCase().replaceAll('ё', 'е')
 }
 
 function findQuestionId(questions, type) {
   const matchers = {
-    relevance: ['актуальна', 'актуально', 'тема crm', 'тема срм', 'битрикс24'],
-    process: ['фиксируются', 'фиксируете', 'заявки', 'обращения', 'ведёте', 'ведете'],
-    pain: ['потер', 'теряются', 'контроль', 'контролировать', 'проблема'],
-    team: ['сколько', 'сотрудников', 'менеджеров', 'отдел'],
-    nextStep: ['удобно', 'обсудить', 'встреч', 'созвон', 'когда'],
+    relevance: [
+      'актуальна',
+      'актуально',
+      'интересно',
+      'тема crm',
+      'тема срм',
+      'битрикс24',
+      'битрикс',
+    ],
+    process: [
+      'фиксируются',
+      'фиксируете',
+      'заявки',
+      'обращения',
+      'ведем',
+      'ведете',
+      'excel',
+      'эксель',
+      'таблиц',
+    ],
+    pain: [
+      'потер',
+      'теряются',
+      'контроль',
+      'контролировать',
+      'проблема',
+      'хаос',
+      'забывают',
+    ],
+    team: [
+      'сколько',
+      'сотрудников',
+      'менеджеров',
+      'отдел',
+      'продаж',
+    ],
+    decisionMaker: [
+      'кто принимает',
+      'решение',
+      'директор',
+      'руководитель',
+      'собственник',
+      'лпр',
+    ],
+    nextStep: [
+      'удобно',
+      'обсудить',
+      'встреч',
+      'созвон',
+      'когда',
+      'аудит',
+      'следующей неделе',
+    ],
   }
 
   const keywords = matchers[type] || []
@@ -273,18 +318,27 @@ function analyzeTranscriptText(text, questions) {
     normalized.includes('crm') ||
     normalized.includes('срм')
   ) {
-    addQuestion('relevance', 'Тема CRM / Битрикс24 подтверждена как актуальная.')
+    addQuestion(
+      'relevance',
+      'Тема CRM / Битрикс24 подтверждена как актуальная.'
+    )
   }
 
   if (
     normalized.includes('excel') ||
-    normalized.includes('эксел') ||
+    normalized.includes('эксель') ||
     normalized.includes('таблиц') ||
     normalized.includes('заявк') ||
     normalized.includes('обращен') ||
-    normalized.includes('мессендж')
+    normalized.includes('мессендж') ||
+    normalized.includes('ватсап') ||
+    normalized.includes('whatsapp') ||
+    normalized.includes('телеграм')
   ) {
-    addQuestion('process', 'Клиент рассказал, как сейчас фиксируются заявки.')
+    addQuestion(
+      'process',
+      'Клиент рассказал, как сейчас фиксируются заявки.'
+    )
   }
 
   if (
@@ -295,7 +349,10 @@ function analyzeTranscriptText(text, questions) {
     normalized.includes('контрол') ||
     normalized.includes('хаос')
   ) {
-    addQuestion('pain', 'Выявлена боль: потери заявок / контроль менеджеров.')
+    addQuestion(
+      'pain',
+      'Выявлена боль: потери заявок / контроль менеджеров.'
+    )
   }
 
   if (
@@ -305,7 +362,23 @@ function analyzeTranscriptText(text, questions) {
     /\b[2-9]\s*(менеджер|сотрудник)/i.test(text) ||
     /\b[1-9][0-9]\s*(менеджер|сотрудник)/i.test(text)
   ) {
-    addQuestion('team', 'Клиент обозначил масштаб отдела / количество сотрудников.')
+    addQuestion(
+      'team',
+      'Клиент обозначил масштаб отдела / количество сотрудников.'
+    )
+  }
+
+  if (
+    normalized.includes('решение') ||
+    normalized.includes('директор') ||
+    normalized.includes('руководитель') ||
+    normalized.includes('собственник') ||
+    normalized.includes('лпр')
+  ) {
+    addQuestion(
+      'decisionMaker',
+      'Появилась информация о лице, принимающем решение.'
+    )
   }
 
   if (
@@ -316,7 +389,10 @@ function analyzeTranscriptText(text, questions) {
     normalized.includes('аудит') ||
     normalized.includes('готов')
   ) {
-    addQuestion('nextStep', 'Есть сигнал к следующему шагу: аудит / встреча / обсуждение.')
+    addQuestion(
+      'nextStep',
+      'Есть сигнал к следующему шагу: аудит / встреча / обсуждение.'
+    )
   }
 
   if (
@@ -369,6 +445,14 @@ function buildRecommendation(questions, coveredQuestionIds, detectedObjections) 
   return 'Все ключевые вопросы закрыты. Фиксируй следующий шаг: аудит, встреча или КП.'
 }
 
+function getSpeechRecognitionConstructor() {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null
+}
+
 function App() {
   const [bitrixContext, setBitrixContext] = useState(null)
   const [contextError, setContextError] = useState(null)
@@ -384,11 +468,18 @@ function App() {
   const [liveStatus, setLiveStatus] = useState('idle')
   const [liveError, setLiveError] = useState(null)
 
+  const [browserSpeechStatus, setBrowserSpeechStatus] = useState('idle')
+  const [browserSpeechError, setBrowserSpeechError] = useState(null)
+  const [browserInterimText, setBrowserInterimText] = useState('')
+
   const [askedQuestionIds, setAskedQuestionIds] = useState([])
   const [saveResult, setSaveResult] = useState(null)
+  const [isSavingResult, setIsSavingResult] = useState(false)
 
   const wsRef = useRef(null)
   const demoTimerRef = useRef(null)
+  const speechRecognitionRef = useRef(null)
+  const speechShouldRunRef = useRef(false)
 
   const activeScript = useMemo(() => getFirstScript(), [])
   const questions = useMemo(() => normalizeQuestions(activeScript), [activeScript])
@@ -448,7 +539,9 @@ function App() {
           return
         }
 
-        setContextError(error.message || 'Не удалось загрузить контекст Bitrix24')
+        setContextError(
+          error.message || 'Не удалось загрузить контекст Bitrix24'
+        )
       }
     }
 
@@ -486,10 +579,16 @@ function App() {
       return
     }
 
-    startLiveTranscriptClient()
+    if (ENABLE_WEBSOCKET_LIVE_STREAM) {
+      startLiveTranscriptClient()
+    } else {
+      setLiveStatus('browser-only')
+      setLiveError(null)
+    }
 
     return () => {
       stopLiveTranscriptClient()
+      stopBrowserSpeechRecognition()
     }
   }, [bitrixContext, isCallCard])
 
@@ -617,7 +716,9 @@ function App() {
       }
     } catch (error) {
       setLiveStatus('error')
-      setLiveError(error.message || 'Не удалось подключить live-транскрипцию')
+      setLiveError(
+        error.message || 'Не удалось подключить live-транскрипцию'
+      )
     }
   }
 
@@ -633,6 +734,129 @@ function App() {
     }
   }
 
+  function startBrowserSpeechRecognition() {
+    const SpeechRecognition = getSpeechRecognitionConstructor()
+
+    if (!SpeechRecognition) {
+      setBrowserSpeechStatus('unsupported')
+      setBrowserSpeechError(
+        'Браузер не поддерживает SpeechRecognition. Тестируй в Chrome или Edge.'
+      )
+      return
+    }
+
+    if (!window.isSecureContext) {
+      setBrowserSpeechStatus('error')
+      setBrowserSpeechError(
+        'Для микрофона нужен HTTPS-контекст. В Bitrix24/Vercel это должно работать.'
+      )
+      return
+    }
+
+    stopBrowserSpeechRecognition()
+
+    const recognition = new SpeechRecognition()
+
+    recognition.lang = 'ru-RU'
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.maxAlternatives = 1
+
+    speechShouldRunRef.current = true
+    speechRecognitionRef.current = recognition
+
+    recognition.onstart = () => {
+      setBrowserSpeechStatus('listening')
+      setBrowserSpeechError(null)
+    }
+
+    recognition.onresult = (event) => {
+      let interimText = ''
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index]
+        const transcript = result[0]?.transcript || ''
+
+        if (result.isFinal) {
+          const finalText = transcript.trim()
+
+          if (finalText) {
+            addLiveMessage(`Распознано: ${finalText}`, 'browser-stt')
+          }
+        } else {
+          interimText += transcript
+        }
+      }
+
+      setBrowserInterimText(interimText.trim())
+    }
+
+    recognition.onerror = (event) => {
+      if (event.error === 'no-speech') {
+        return
+      }
+
+      setBrowserSpeechStatus('error')
+      setBrowserSpeechError(`Ошибка распознавания: ${event.error}`)
+    }
+
+    recognition.onend = () => {
+      setBrowserInterimText('')
+
+      if (!speechShouldRunRef.current) {
+        setBrowserSpeechStatus('stopped')
+        return
+      }
+
+      setBrowserSpeechStatus('restarting')
+
+      window.setTimeout(() => {
+        if (!speechShouldRunRef.current) {
+          return
+        }
+
+        try {
+          recognition.start()
+        } catch {
+          setBrowserSpeechStatus('error')
+          setBrowserSpeechError('Не удалось перезапустить распознавание речи.')
+        }
+      }, 500)
+    }
+
+    try {
+      recognition.start()
+    } catch (error) {
+      setBrowserSpeechStatus('error')
+      setBrowserSpeechError(
+        error.message || 'Не удалось запустить распознавание речи.'
+      )
+    }
+  }
+
+  function stopBrowserSpeechRecognition() {
+    speechShouldRunRef.current = false
+
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop()
+      } catch {
+        // Игнорируем ошибку остановки.
+      }
+
+      speechRecognitionRef.current = null
+    }
+
+    setBrowserInterimText('')
+    setBrowserSpeechStatus((currentStatus) => {
+      if (currentStatus === 'idle') {
+        return currentStatus
+      }
+
+      return 'stopped'
+    })
+  }
+
   async function handleRegisterCallCardPlacement() {
     setPlacementError(null)
     setPlacementResult(null)
@@ -641,7 +865,9 @@ function App() {
       const result = await registerCallCardPlacement()
       setPlacementResult(result)
     } catch (error) {
-      setPlacementError(error.message || 'Не удалось перепривязать CALL_CARD')
+      setPlacementError(
+        error.message || 'Не удалось перепривязать CALL_CARD'
+      )
     }
   }
 
@@ -657,7 +883,9 @@ function App() {
         handlers,
       })
     } catch (error) {
-      setPlacementError(error.message || 'Не удалось получить handlers CALL_CARD')
+      setPlacementError(
+        error.message || 'Не удалось получить handlers CALL_CARD'
+      )
     }
   }
 
@@ -707,7 +935,9 @@ function App() {
         bx24PlacementAvailable: Boolean(window.BX24.placement),
       })
     } catch (error) {
-      setCallCardError(error.message || 'Не удалось получить данные CALL_CARD')
+      setCallCardError(
+        error.message || 'Не удалось получить данные CALL_CARD'
+      )
     }
   }
 
@@ -722,16 +952,29 @@ function App() {
   }
 
   async function handleSaveCallResult() {
-    if (!bitrixContext) {
+    if (!bitrixContext || isSavingResult || saveResult?.success) {
       return
     }
+
+    setIsSavingResult(true)
 
     const summaryText = [
       'Итог звонка AI Sales Assistant.',
       '',
-      `Клиент: ${bitrixContext.client?.name || 'Неизвестный клиент'}`,
+      `Клиент: ${
+        bitrixContext.client?.name || 'Неизвестный клиент'
+      }`,
       `Телефон: ${bitrixContext.client?.phone || ''}`,
+      `CRM: ${formatEntity(bitrixContext.entityType, bitrixContext.entityId)}`,
       `Закрыто вопросов: ${coveredQuestionIds.length} из ${questions.length}`,
+      '',
+      transcriptAnalysis.insights.length > 0
+        ? `Найдено в разговоре:\n- ${transcriptAnalysis.insights.join('\n- ')}`
+        : '',
+      transcriptAnalysis.objections.length > 0
+        ? `Возражения:\n- ${transcriptAnalysis.objections.join('\n- ')}`
+        : '',
+      nextQuestion ? `Следующий незакрытый вопрос: ${nextQuestion.text}` : '',
       '',
       liveTranscriptText ? `Live-транскрипция:\n${liveTranscriptText}` : '',
       transcriptText ? `Ручная заметка:\n${transcriptText}` : '',
@@ -748,6 +991,7 @@ function App() {
     })
 
     setSaveResult(result)
+    setIsSavingResult(false)
   }
 
   function getLiveStatusText() {
@@ -756,6 +1000,7 @@ function App() {
       demo: 'демо-поток',
       'demo-finished': 'демо завершено',
       'not-configured': 'WebSocket не настроен',
+      'browser-only': 'WebSocket выключен, тестируем браузерную транскрибацию',
       connecting: 'подключение',
       connected: 'подключено',
       closed: 'соединение закрыто',
@@ -763,6 +1008,19 @@ function App() {
     }
 
     return map[liveStatus] || liveStatus
+  }
+
+  function getBrowserSpeechStatusText() {
+    const map = {
+      idle: 'ожидание',
+      listening: 'микрофон слушает',
+      restarting: 'перезапуск распознавания',
+      stopped: 'остановлено',
+      unsupported: 'не поддерживается браузером',
+      error: 'ошибка',
+    }
+
+    return map[browserSpeechStatus] || browserSpeechStatus
   }
 
   if (!bitrixContext && !contextError) {
@@ -797,7 +1055,9 @@ function App() {
         <p>
           <strong>Клиент:</strong>{' '}
           {bitrixContext.client?.name || 'Неизвестный клиент'}
-          {bitrixContext.client?.company ? ` · ${bitrixContext.client.company}` : ''}
+          {bitrixContext.client?.company
+            ? ` · ${bitrixContext.client.company}`
+            : ''}
         </p>
 
         <p>
@@ -811,7 +1071,8 @@ function App() {
 
         <p>
           <strong>Ответственный:</strong>{' '}
-          {bitrixContext.responsible?.name || 'Ответственный не определён'}
+          {bitrixContext.responsible?.name ||
+            'Ответственный не определён'}
         </p>
 
         {showTechnicalPanel && (
@@ -863,13 +1124,70 @@ function App() {
         <p>Сегмент: {activeScript?.segment || 'cold'}</p>
         <p>Прогресс: {progressText}</p>
 
-        <button type="button" onClick={handleSaveCallResult}>
-          Завершить и сохранить итог звонка
+        <button
+          type="button"
+          onClick={handleSaveCallResult}
+          disabled={isSavingResult || Boolean(saveResult?.success)}
+        >
+          {isSavingResult
+            ? 'Сохраняю итог...'
+            : saveResult?.success
+              ? 'Итог уже сохранён'
+              : 'Завершить и сохранить итог звонка'}
         </button>
 
         {saveResult && (
-          <p>{saveResult.message || saveResult.error || 'Результат обработан'}</p>
+          <p>
+            {saveResult.message ||
+              saveResult.error ||
+              'Результат обработан'}
+          </p>
         )}
+      </section>
+
+      <section className="browser-speech-block">
+        <h2>Браузерная транскрибация MVP</h2>
+
+        <p>
+          <strong>Статус:</strong> {getBrowserSpeechStatusText()}
+        </p>
+
+        <div className="placement-actions">
+          <button
+            type="button"
+            onClick={startBrowserSpeechRecognition}
+            disabled={browserSpeechStatus === 'listening'}
+          >
+            Начать транскрибацию
+          </button>
+
+          <button
+            type="button"
+            onClick={stopBrowserSpeechRecognition}
+            disabled={
+              browserSpeechStatus !== 'listening' &&
+              browserSpeechStatus !== 'restarting'
+            }
+          >
+            Остановить транскрибацию
+          </button>
+        </div>
+
+        {browserSpeechError && (
+          <p className="error-text">{browserSpeechError}</p>
+        )}
+
+        {browserInterimText && (
+          <p>
+            <strong>Сейчас распознаётся:</strong> {browserInterimText}
+          </p>
+        )}
+
+        <p>
+          Это MVP-тест. Браузер слушает микрофон компьютера, а не прямой
+          аудиопоток Bitrix24. Клиента будет слышно только если его голос
+          попадает в микрофон.
+        </p>
       </section>
 
       <section className="live-transcript-block">
@@ -884,7 +1202,7 @@ function App() {
           <p>Пока нет live-фраз.</p>
         ) : (
           <ul>
-            {liveMessages.slice(-6).map((message) => (
+            {liveMessages.slice(-8).map((message) => (
               <li key={message.id}>
                 <span>{message.text}</span>
               </li>
@@ -902,7 +1220,9 @@ function App() {
         <h2>Найдено в разговоре: {transcriptAnalysis.insights.length}</h2>
 
         {transcriptAnalysis.insights.length === 0 ? (
-          <p>Пока в разговоре не найдено закрытых смысловых блоков.</p>
+          <p>
+            Пока в разговоре не найдено закрытых смысловых блоков.
+          </p>
         ) : (
           <ul>
             {transcriptAnalysis.insights.map((insight) => (
@@ -953,13 +1273,21 @@ function App() {
           {questions.map((question) => {
             const isCovered = coveredQuestionIds.includes(question.id)
             const isManual = askedQuestionIds.includes(question.id)
-            const isAuto = transcriptAnalysis.detectedQuestionIds.includes(question.id)
+            const isAuto = transcriptAnalysis.detectedQuestionIds.includes(
+              question.id
+            )
 
             return (
               <li key={question.id}>
                 <span>{question.text}</span>{' '}
                 {isCovered && (
-                  <strong>{isManual ? '✓ вручную' : isAuto ? '✓ по разговору' : '✓'}</strong>
+                  <strong>
+                    {isManual
+                      ? '✓ вручную'
+                      : isAuto
+                        ? '✓ по разговору'
+                        : '✓'}
+                  </strong>
                 )}{' '}
                 {!isCovered && (
                   <button
@@ -980,7 +1308,7 @@ function App() {
         <textarea
           value={transcriptText}
           onChange={(event) => setTranscriptText(event.target.value)}
-          placeholder="Резервное поле. Основной сценарий — live-текст через WebSocket."
+          placeholder="Резервное поле. Основной сценарий — live-текст через браузерную транскрибацию или WebSocket."
         />
       </section>
 
