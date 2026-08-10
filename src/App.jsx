@@ -3,17 +3,17 @@ import scripts from './data/scripts.json'
 import { getBitrixContext, saveCallResult } from './services/bitrixAdapter'
 import './App.css'
 
-const APP_VERSION = 'call-card-vercel-v20'
+const APP_VERSION = 'call-card-vercel-v21'
 const CALL_CARD_HANDLER_URL =
   'https://ai-sales-assistant-tau-ten.vercel.app/api/placement?v=3'
 
 const LIVE_TRANSCRIPT_WS_URL =
-  'wss://ai-sales-assistant-live-server.onrender.com/ws'
+  'wss://orion.leado-crm.ru/ws'
 
-// На этом этапе тестируем браузерную транскрибацию.
-// Render WebSocket оставляем в коде, но авто-поток выключаем,
-// чтобы тестовые фразы с сервера не мешали проверке микрофона.
-const ENABLE_WEBSOCKET_LIVE_STREAM = false
+const ORION_TOKEN_API_URL =
+  '/api/orion-token'
+
+const ENABLE_WEBSOCKET_LIVE_STREAM = true
 const ENABLE_DEMO_LIVE_STREAM = false
 
 const DEMO_LIVE_PHRASES = [
@@ -40,6 +40,85 @@ function callBitrixMethod(method, params = {}) {
       resolve(result.data())
     })
   })
+}
+
+function getBitrixAuth() {
+  if (
+    !window.BX24 ||
+    typeof window.BX24.getAuth !== 'function'
+  ) {
+    throw new Error(
+      'BX24.getAuth недоступен'
+    )
+  }
+
+  const auth = window.BX24.getAuth()
+
+  if (
+    !auth?.access_token ||
+    !auth?.domain ||
+    !auth?.member_id
+  ) {
+    throw new Error(
+      'Bitrix24 не передал OAuth-данные'
+    )
+  }
+
+  return {
+    access_token:
+      String(auth.access_token),
+    domain:
+      String(auth.domain),
+    member_id:
+      String(auth.member_id),
+  }
+}
+
+async function requestOrionAuthToken({
+  callId,
+  phone,
+}) {
+  const response = await fetch(
+    ORION_TOKEN_API_URL,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type':
+          'application/json',
+        Accept:
+          'application/json',
+      },
+      cache: 'no-store',
+      body: JSON.stringify({
+        callId,
+        phone,
+        auth: getBitrixAuth(),
+      }),
+    }
+  )
+
+  let data = null
+
+  try {
+    data = await response.json()
+  } catch {
+    data = null
+  }
+
+  if (
+    !response.ok ||
+    !data?.authToken
+  ) {
+    const reason =
+      data?.error ||
+      `HTTP ${response.status}`
+
+    throw new Error(
+      `Не удалось получить токен Orion: ${reason}`
+    )
+  }
+
+  return data.authToken
 }
 
 function normalizePlacementHandlers(data) {
@@ -467,6 +546,7 @@ function App() {
   const [liveMessages, setLiveMessages] = useState([])
   const [liveStatus, setLiveStatus] = useState('idle')
   const [liveError, setLiveError] = useState(null)
+  const [liveCallContext, setLiveCallContext] = useState(null)
 
   const [browserSpeechStatus, setBrowserSpeechStatus] = useState('idle')
   const [browserSpeechError, setBrowserSpeechError] = useState(null)
@@ -477,6 +557,7 @@ function App() {
   const [isSavingResult, setIsSavingResult] = useState(false)
 
   const wsRef = useRef(null)
+  const liveConnectionAttemptRef = useRef(0)
   const demoTimerRef = useRef(null)
   const speechRecognitionRef = useRef(null)
   const speechShouldRunRef = useRef(false)
@@ -521,6 +602,71 @@ function App() {
   )
 
   const progressText = `${coveredQuestionIds.length} из ${questions.length}`
+
+  useEffect(() => {
+    let cancelled = false
+    let timer = null
+    let attempts = 0
+
+    const captureImmediateCallContext = () => {
+      if (cancelled) {
+        return
+      }
+
+      try {
+        const placementInfo =
+          window.BX24?.placement?.info?.()
+
+        const options =
+          placementInfo?.options || {}
+
+        const auth =
+          window.BX24?.getAuth?.()
+
+        const callId =
+          String(options.CALL_ID || '').trim()
+
+        const phone =
+          String(options.PHONE_NUMBER || '').trim()
+
+        if (
+          placementInfo?.placement === 'CALL_CARD' &&
+          callId &&
+          phone &&
+          auth?.access_token &&
+          auth?.domain &&
+          auth?.member_id
+        ) {
+          setLiveCallContext({
+            callId,
+            phone,
+          })
+          return
+        }
+      } catch {
+        // BX24 ещё может инициализироваться.
+      }
+
+      attempts += 1
+
+      if (attempts < 50) {
+        timer = window.setTimeout(
+          captureImmediateCallContext,
+          100
+        )
+      }
+    }
+
+    captureImmediateCallContext()
+
+    return () => {
+      cancelled = true
+
+      if (timer) {
+        window.clearTimeout(timer)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     let isMounted = true
@@ -571,16 +717,12 @@ function App() {
   }, [bitrixContext])
 
   useEffect(() => {
-    if (!bitrixContext) {
-      return
-    }
-
-    if (!isCallCard) {
+    if (!liveCallContext) {
       return
     }
 
     if (ENABLE_WEBSOCKET_LIVE_STREAM) {
-      startLiveTranscriptClient()
+      startLiveTranscriptClient(liveCallContext)
     } else {
       setLiveStatus('browser-only')
       setLiveError(null)
@@ -590,7 +732,11 @@ function App() {
       stopLiveTranscriptClient()
       stopBrowserSpeechRecognition()
     }
-  }, [bitrixContext, isCallCard])
+
+    // Live-соединение запускается по минимальному
+    // CALL_CARD-контексту и не ждёт загрузки CRM.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveCallContext])
 
   function addLiveMessage(text, source = 'live') {
     const cleanText = String(text || '').trim()
@@ -631,8 +777,11 @@ function App() {
     }, 3000)
   }
 
-  function startLiveTranscriptClient() {
+  async function startLiveTranscriptClient(liveContext) {
     stopLiveTranscriptClient()
+
+    const connectionAttempt =
+      liveConnectionAttemptRef.current
 
     if (!LIVE_TRANSCRIPT_WS_URL) {
       if (ENABLE_DEMO_LIVE_STREAM) {
@@ -645,40 +794,76 @@ function App() {
     }
 
     try {
-      const url = new URL(LIVE_TRANSCRIPT_WS_URL)
+      const callId =
+        String(
+          liveContext.callId || ''
+        ).trim()
 
-      if (bitrixContext.callId) {
-        url.searchParams.set('callId', bitrixContext.callId)
+      const phone =
+        String(
+          liveContext.phone || ''
+        ).trim()
+
+      if (!callId || !phone) {
+        throw new Error(
+          'Для live-транскрипции нужны CALL_ID и телефон'
+        )
       }
 
-      if (bitrixContext.responsible?.id) {
-        url.searchParams.set('userId', bitrixContext.responsible.id)
-      }
+      setLiveStatus('authorizing')
+      setLiveError(null)
 
-      url.searchParams.set('source', 'call-card')
+      const authToken =
+        await requestOrionAuthToken({
+          callId,
+          phone,
+        })
+
+      if (
+        liveConnectionAttemptRef.current !==
+        connectionAttempt
+      ) {
+        return
+      }
 
       setLiveStatus('connecting')
       setLiveError(null)
 
-      const ws = new WebSocket(url.toString())
+      const ws = new WebSocket(
+        LIVE_TRANSCRIPT_WS_URL
+      )
       wsRef.current = ws
 
       ws.onopen = () => {
+        if (wsRef.current !== ws) {
+          ws.close()
+          return
+        }
+
         setLiveStatus('connected')
         setLiveError(null)
 
         ws.send(
           JSON.stringify({
             type: 'join_call',
-            callId: bitrixContext.callId,
-            userId: bitrixContext.responsible?.id || '',
-            crmEntityType: bitrixContext.entityType,
-            crmEntityId: bitrixContext.entityId,
+            callId,
+            phone,
+            authToken,
+            userId:
+              bitrixContext?.responsible?.id || '',
+            crmEntityType:
+              bitrixContext?.entityType || '',
+            crmEntityId:
+              bitrixContext?.entityId || '',
           })
         )
       }
 
       ws.onmessage = (event) => {
+        if (wsRef.current !== ws) {
+          return
+        }
+
         try {
           const data = JSON.parse(event.data)
 
@@ -701,11 +886,21 @@ function App() {
       }
 
       ws.onerror = () => {
+        if (wsRef.current !== ws) {
+          return
+        }
+
         setLiveStatus('error')
         setLiveError('Ошибка WebSocket-подключения')
       }
 
       ws.onclose = () => {
+        if (wsRef.current !== ws) {
+          return
+        }
+
+        wsRef.current = null
+
         setLiveStatus((currentStatus) => {
           if (currentStatus === 'error') {
             return currentStatus
@@ -715,6 +910,13 @@ function App() {
         })
       }
     } catch (error) {
+      if (
+        liveConnectionAttemptRef.current !==
+        connectionAttempt
+      ) {
+        return
+      }
+
       setLiveStatus('error')
       setLiveError(
         error.message || 'Не удалось подключить live-транскрипцию'
@@ -723,14 +925,17 @@ function App() {
   }
 
   function stopLiveTranscriptClient() {
+    liveConnectionAttemptRef.current += 1
+
     if (demoTimerRef.current) {
       clearInterval(demoTimerRef.current)
       demoTimerRef.current = null
     }
 
     if (wsRef.current) {
-      wsRef.current.close()
+      const ws = wsRef.current
       wsRef.current = null
+      ws.close()
     }
   }
 
@@ -1001,6 +1206,7 @@ function App() {
       'demo-finished': 'демо завершено',
       'not-configured': 'WebSocket не настроен',
       'browser-only': 'WebSocket выключен, тестируем браузерную транскрибацию',
+      authorizing: 'авторизация',
       connecting: 'подключение',
       connected: 'подключено',
       closed: 'соединение закрыто',
