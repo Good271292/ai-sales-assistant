@@ -546,6 +546,7 @@ function App() {
   const [liveMessages, setLiveMessages] = useState([])
   const [liveStatus, setLiveStatus] = useState('idle')
   const [liveError, setLiveError] = useState(null)
+  const [liveCallContext, setLiveCallContext] = useState(null)
 
   const [browserSpeechStatus, setBrowserSpeechStatus] = useState('idle')
   const [browserSpeechError, setBrowserSpeechError] = useState(null)
@@ -603,6 +604,71 @@ function App() {
   const progressText = `${coveredQuestionIds.length} из ${questions.length}`
 
   useEffect(() => {
+    let cancelled = false
+    let timer = null
+    let attempts = 0
+
+    const captureImmediateCallContext = () => {
+      if (cancelled) {
+        return
+      }
+
+      try {
+        const placementInfo =
+          window.BX24?.placement?.info?.()
+
+        const options =
+          placementInfo?.options || {}
+
+        const auth =
+          window.BX24?.getAuth?.()
+
+        const callId =
+          String(options.CALL_ID || '').trim()
+
+        const phone =
+          String(options.PHONE_NUMBER || '').trim()
+
+        if (
+          placementInfo?.placement === 'CALL_CARD' &&
+          callId &&
+          phone &&
+          auth?.access_token &&
+          auth?.domain &&
+          auth?.member_id
+        ) {
+          setLiveCallContext({
+            callId,
+            phone,
+          })
+          return
+        }
+      } catch {
+        // BX24 ещё может инициализироваться.
+      }
+
+      attempts += 1
+
+      if (attempts < 50) {
+        timer = window.setTimeout(
+          captureImmediateCallContext,
+          100
+        )
+      }
+    }
+
+    captureImmediateCallContext()
+
+    return () => {
+      cancelled = true
+
+      if (timer) {
+        window.clearTimeout(timer)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     let isMounted = true
 
     async function loadContext() {
@@ -651,16 +717,12 @@ function App() {
   }, [bitrixContext])
 
   useEffect(() => {
-    if (!bitrixContext) {
-      return
-    }
-
-    if (!isCallCard) {
+    if (!liveCallContext) {
       return
     }
 
     if (ENABLE_WEBSOCKET_LIVE_STREAM) {
-      startLiveTranscriptClient()
+      startLiveTranscriptClient(liveCallContext)
     } else {
       setLiveStatus('browser-only')
       setLiveError(null)
@@ -671,10 +733,10 @@ function App() {
       stopBrowserSpeechRecognition()
     }
 
-    // Жизненный цикл соединения намеренно зависит
-    // только от контекста текущего звонка.
+    // Live-соединение запускается по минимальному
+    // CALL_CARD-контексту и не ждёт загрузки CRM.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [bitrixContext, isCallCard])
+  }, [liveCallContext])
 
   function addLiveMessage(text, source = 'live') {
     const cleanText = String(text || '').trim()
@@ -715,7 +777,7 @@ function App() {
     }, 3000)
   }
 
-  async function startLiveTranscriptClient() {
+  async function startLiveTranscriptClient(liveContext) {
     stopLiveTranscriptClient()
 
     const connectionAttempt =
@@ -734,12 +796,12 @@ function App() {
     try {
       const callId =
         String(
-          bitrixContext.callId || ''
+          liveContext.callId || ''
         ).trim()
 
       const phone =
         String(
-          bitrixContext.client?.phone || ''
+          liveContext.phone || ''
         ).trim()
 
       if (!callId || !phone) {
@@ -788,11 +850,11 @@ function App() {
             phone,
             authToken,
             userId:
-              bitrixContext.responsible?.id || '',
+              bitrixContext?.responsible?.id || '',
             crmEntityType:
-              bitrixContext.entityType,
+              bitrixContext?.entityType || '',
             crmEntityId:
-              bitrixContext.entityId,
+              bitrixContext?.entityId || '',
           })
         )
       }
